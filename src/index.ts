@@ -1,29 +1,27 @@
 import { loadEnvFile } from 'node:process';
-import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import fs from 'node:fs';
+import path from 'node:path';
 
-import { Client, Collection, Events, GatewayIntentBits, MessageFlags } from 'discord.js';
+import { Collection, GatewayIntentBits } from 'discord.js';
 
+import { DiscordClient } from './types/client.js';
+import type { Event } from './types/event.js';
 import type { Command } from './types/command.js';
 
 loadEnvFile();
 
-class DiscordClient extends Client {
-	commands = new Collection<string, Command>();
-}
-
 const client = new DiscordClient({ intents: [GatewayIntentBits.Guilds] });
 client.commands = new Collection();
 
-const foldersPath = join(import.meta.dirname, 'commands');
-const commandFolders = readdirSync(foldersPath);
+const foldersPath = path.join(import.meta.dirname, 'commands');
+const commandFolders = fs.readdirSync(foldersPath);
 
 for (const folder of commandFolders) {
-	const commandsPath = join(foldersPath, folder);
-	const commandFiles = readdirSync(commandsPath)
+	const commandsPath = path.join(foldersPath, folder);
+	const commandFiles = fs.readdirSync(commandsPath)
 		.filter(file => (file.endsWith('.js') || file.endsWith('.ts')) && !file.endsWith('.d.ts'));
 	for (const file of commandFiles) {
-		const filePath = join(commandsPath, file);
+		const filePath = path.join(commandsPath, file);
 
 		const module = await import(filePath);
 		const cmd: Command = module.default;
@@ -32,31 +30,21 @@ for (const folder of commandFolders) {
 	}
 }
 
-client.once(Events.ClientReady, readyClient => {
-	console.log(`Ready! Logged as ${readyClient.user.tag}`);
-});
+const eventsPath = path.join(import.meta.dirname, 'events');
+const eventFiles = fs.readdirSync(eventsPath)
+	.filter((file) => (file.endsWith('.ts') || file.endsWith('.js')) && !file.endsWith('.d.ts'));
 
-client.on(Events.InteractionCreate, async interaction => {
-	if (!interaction.isChatInputCommand()) return;
+for (const file of eventFiles) {
+	const filePath = path.join(eventsPath, file);
 
-	const discordClient = interaction.client as DiscordClient;
-	const command = discordClient.commands.get(interaction.commandName);
+	const module = await import(filePath);
+	const event: Event = module.default;
 
-	if (!command) {
-		console.error(`No command matching ${interaction.commandName} was found.`);
-		return;
+	if (event.once) {
+		client.once(event.name, (...args) => event.execute(...args));
+	} else {
+		client.on(event.name, (...args) => event.execute(...args));
 	}
-
-	try {
-		await command.execute(interaction);
-	} catch (error) {
-		console.error(error);
-		if (interaction.replied || interaction.deferred) {
-			await interaction.followUp({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
-		} else {
-			await interaction.reply({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
-		}
-	}
-});
+}
 
 client.login(process.env.TOKEN);
